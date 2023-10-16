@@ -4,6 +4,31 @@
   
     
     <entry>
+      <title>hexo d出现Error:Spawn failed错误</title>
+      <link href="/2023/10/16/hexo-d-%E5%87%BA%E7%8E%B0Error-Spawn-failed%E9%94%99%E8%AF%AF/"/>
+      <url>/2023/10/16/hexo-d-%E5%87%BA%E7%8E%B0Error-Spawn-failed%E9%94%99%E8%AF%AF/</url>
+      
+        <content type="html"><![CDATA[<p>hexo d 后出现如下错误</p><p><img src=".\2023-10-16 162846.png" alt=""></p><p>出现上图错误可能是连接GitHub的22端口可能被防火墙屏蔽了，可以尝试连接GitHub的443端口。</p><p>这个解决方案的思路是：给<code>~/.ssh/config</code>文件里添加如下内容，如果<code>~/.ssh</code>目录下没有config文件，新建一个即可。这样ssh连接GitHub的时候就会使用443端口。</p><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">Host github.com</span><br><span class="line">  Hostname ssh.github.com</span><br><span class="line">  Port 443</span><br></pre></td></tr></table></figure><p>​        <strong>这个方案有效的前提是</strong>：执行命令<code>ssh -T -p 443 git@ssh.github.com</code></p><p>​        修改完<code>~/.ssh/config</code>文件后，使用<code>ssh -T git@github.com</code>来测试和GitHub的网络通信是否正常，如果提示<code>Hi xxxxx! You&#39;ve successfully authenticated, but GitHub does not provide shell access.</code> 就表示一切正常了。</p>]]></content>
+      
+      
+      <categories>
+          
+          <category> 遇到的问题 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> Hexo </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
       <title>Feign远程调用丢失请求头问题解决方案</title>
       <link href="/2023/06/12/Feign%E8%BF%9C%E7%A8%8B%E8%B0%83%E7%94%A8%E4%B8%A2%E5%A4%B1%E8%AF%B7%E6%B1%82%E5%A4%B4%E9%97%AE%E9%A2%98%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88/"/>
       <url>/2023/06/12/Feign%E8%BF%9C%E7%A8%8B%E8%B0%83%E7%94%A8%E4%B8%A2%E5%A4%B1%E8%AF%B7%E6%B1%82%E5%A4%B4%E9%97%AE%E9%A2%98%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88/</url>
