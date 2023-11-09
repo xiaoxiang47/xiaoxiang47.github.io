@@ -4,6 +4,31 @@
   
     
     <entry>
+      <title>Redis持久化</title>
+      <link href="/2023/11/08/Redis%E6%8C%81%E4%B9%85%E5%8C%96/"/>
+      <url>/2023/11/08/Redis%E6%8C%81%E4%B9%85%E5%8C%96/</url>
+      
+        <content type="html"><![CDATA[<div class="tip home"><p>Redis是一个基于内存的数据库，所有的数据都存放在内存中，如果突然宕机，那么数据就会全部丢失，因此必须有一种机制来保证 Redis 的数据不会因为故障而丢失，这种机制就是 Redis 的持久化机制。Redis持久化主要有RDB快照(Redis DataBase)和AOF日志(Append Only File)两种方式。</p></div><h2 id="一、RDB机制："><a href="#一、RDB机制：" class="headerlink" title="一、RDB机制："></a>一、RDB机制：</h2><p>​        RDB持久化是指在指定的时间间隔内将内存中的数据集以快照的方式写入磁盘，并保存到一个名为dump.rdb的二进制文件中，也是默认的持久化方式，它恢复时是将快照文件从磁盘直接读到内存里。</p><h3 id="1、触发机制："><a href="#1、触发机制：" class="headerlink" title="1、触发机制："></a>1、触发机制：</h3><div class="tip info"><p>RDB持久化触发机制有三种：save、bgsave、自动化触发</p></div><blockquote><p>（1）save命令触发：</p></blockquote><p>该命令会阻塞当前Redis服务器，执行save命令期间，Redis不能处理其他命令，直到RDB完成为止，如果数据量大的话会造成长时间的阻塞，所以线上环境一般禁止使用。</p><hr><blockquote><p>（2）bgsave命令触发：</p></blockquote><p>执行该命令时，Redis会在后台异步进行快照操作，快照同时还可以响应客户端请求。具体流程如下：</p><p>执行bgsave命令时，Redis主进程会fork一个子进程来完成RDB的过程，会先将数据写入到一个临时二进制文件中，待持久化过程都结束了，再用这个临时文件替换上次持久化好的文件（可以理解为Copy On Write机制）。<strong>Redis主进程阻塞时间只有fork阶段的那一下</strong>。相对于save，阻塞时间很短。基本上 Redis 内部所有的RDB操作都是采用 bgsave 命令。</p><p> fork的作用是复制一个与当前进程一样的进程。新进程的所有数据（变量、环境变量、程序计数器等）数值都和原进程一致，但是是一个全新的进程，并作为原进程的子进程。</p><hr><blockquote><p>（3）自动触发：</p></blockquote><p>自动触发是可以在redis.conf配置文件中修改，默认达到以下三种条件，就会自动触发持久化，触发后，底层调用的其实还有bgsave命令：</p><p>1分钟内改了1万次，5分钟内改了10次，或15分钟内改了1次。</p><p>save 900 1              #在900秒(15分钟)之后，如果至少有1个key发生变化，则dump内存快照。</p><p>save 300 10            #在300秒(5分钟)之后，如果至少有10个key发生变化，则dump内存快照。</p><p>save 60 10000        #在60秒(1分钟)之后，如果至少有10000个key发生变化，则dump内存快照。</p><p>如果不需要持久化机制，则可以注释掉所有的save命令</p><h3 id="2、RDB执行流程："><a href="#2、RDB执行流程：" class="headerlink" title="2、RDB执行流程："></a>2、RDB执行流程：</h3><ol><li><p>执行bgsave命令的时候，Redis主进程会检查是否有子进程在执行RDB/AOF持久化任务，如果有的话，直接返回，主要是为了性能的考虑，防止两个进程同时对磁盘进行写入操作</p></li><li><p>Redis主进程fork一个子进程来执行执行RDB操作，fork操作会对主进程造成阻塞（影响Redis的读写），fork操作完成后会发消息给主进程，从而不再阻塞主进程（阻塞仅指主进程fork子进程的过程，后续子进程执行操作时不会阻塞）</p></li><li><p>RDB子进程把Redis主进程的内存数据，写入到一个临时的快照文件，持久化完成后，再使用临时快照文件替换掉原来的RDB文件。（该过程中主进程的读写不受影响，但Redis的写操作不会同步到主进程的主内存中，而是会写到一个临时的内存区域作为一个副本）</p></li><li><p>子进程完成RDB持久化后会发消息给主进程，通知RDB持久化完成，并将步骤（3）中的内存副本中的增量写数据同步到主内存</p></li></ol><h3 id="3、优势："><a href="#3、优势：" class="headerlink" title="3、优势："></a>3、优势：</h3><p>（1）RDB文件紧凑，全量备份，非常适合用于进行备份和灾难恢复。</p><p>（2）对于大规模数据的恢复，且对于数据恢复的完整性不是非常敏感的场景，RDB的恢复速度要比AOF方式更加的高效。</p><p>（3）生成RDB文件的时候，redis主进程会fork()一个子进程来处理所有保存工作，主进程不需要进行任何磁盘IO操作。</p><h3 id="4、劣势："><a href="#4、劣势：" class="headerlink" title="4、劣势："></a>4、劣势：</h3><p>（1）fork的时候，内存中的数据被克隆了一份，大致2倍的膨胀性需要考虑。</p><p>（2）当进行快照持久化时，会开启一个子进程专门负责快照持久化，子进程会拥有父进程的内存数据，父进程修改内存子进程不会反应出来，所以在快照持久化期间修改的数据不会被保存，可能丢失数据。</p><p>（3）在一定间隔时间做一次备份，所以如果redis意外down掉的话，就会丢失最后一次快照后的所有修改。</p><h2 id="二、AOF机制"><a href="#二、AOF机制" class="headerlink" title="二、AOF机制:"></a>二、AOF机制:</h2><div class="tip info"><p>每次都使用RDB机制全量备份的方式是非常耗时间的，因此Redis还提供了另一种持久化机制AOF（append only file）。AOF日志是持续增量的备份，将Redis执行过的每个写操作以日志的形式记录下来(读操作不记录)，只许追加文件但不可以改写文件(appendonly.aof文件)。redis启动的时候会读取该文件进行数据恢复，根据日志文件的内容将写指令从前到后执行一次以完成数据的恢复工作。</p></div><h3 id="1、AOF文件的rewrite机制："><a href="#1、AOF文件的rewrite机制：" class="headerlink" title="1、AOF文件的rewrite机制："></a>1、AOF文件的rewrite机制：</h3><p>（1）因为AOF采用文件追加方式，文件会越来越大，为避免出现此种情况，需要定期进行AOF重写，当AOF文件的大小超过所设定的阈值时，Redis就会对AOF文件的内容压缩，只保留可以恢复数据的最小指令集。redis提供了bgrewriteaof命令，fork一个新的进程对aof文件进行重写。</p><p>（2）重写原理：AOF文件持续增长而过大时，会fork出一条新进程来重写aof文件，将内存中的整个数据库内容用命令的方式重写了一个新的aof文件（注意：在重写时并不是读取旧的aof文件），在执行 BGREWRITEAOF 命令时，Redis 服务器会维护一个 AOF 重写缓冲区，该缓冲区会在子进程创建新AOF文件期间，记录服务器执行的所有写命令。当子进程完成创建新AOF文件的工作之后，服务器会将重写缓冲区中的所有内容追加到新AOF文件的末尾，使得新旧两个AOF文件所保存的数据库状态一致。最后，服务器用新的AOF文件替换旧的AOF文件，以此来完成AOF文件重写操作。</p><p>（3）触发时机：Redis会记录上次重写时的AOF大小，默认配置是当AOF文件大小是上次rewrite后大小的一倍且文件大于64M时触发。</p><h3 id="2、AOF持久化触发机制："><a href="#2、AOF持久化触发机制：" class="headerlink" title="2、AOF持久化触发机制："></a>2、AOF持久化触发机制：</h3><p>（1）每修改同步：appendfsync always   同步持久化，每次发生数据变更会被立即记录到磁盘，性能较差但数据完整性比较好。</p><p>（2）每秒同步：appendfsync everysec    异步操作，每秒记录，如果一秒内宕机，有数据丢失。</p><p>（3）不同步：appendfsync no   从不同步</p><p>Linux 的 glibc 提供了 fsync()函数可以将指定文件的内容强制从内核缓存刷到磁盘。只要 Redis 进程实时调用 fsync 函数就可以保证 aof 日志不丢失。但是 fsync 是一个磁盘 IO 操作，它速度很慢，如果每条指令都要 fsync 一次，那么 Redis 高性能的地位就不保了。</p><h3 id="3、优点："><a href="#3、优点：" class="headerlink" title="3、优点："></a>3、优点：</h3><p>（1）AOF可以更好的保护数据不丢失，一般AOF会每隔1秒，通过一个后台线程执行一次fsync操作，最多丢失1秒钟的数据。</p><p>（2）AOF只是追加写日志文件，对服务器性能影响较小，速度比RDB要快，消耗的内存较少</p><p>（3）AOF日志文件即使过大的时候，出现后台重写操作，也不会影响客户端的读写。</p><p>（4）AOF日志文件的命令通过非常可读的方式进行记录，这个特性非常适合做灾难性的误删除的紧急恢复。比如某人不小心用flushall命令清空了所有数据，只要这个时候后台rewrite还没有发生，那么就可以立即拷贝AOF文件，将最后一条flushall命令给删了，然后再将该AOF文件放回去，就可以通过恢复机制，自动恢复所有数据。</p><h3 id="4、劣势：-1"><a href="#4、劣势：-1" class="headerlink" title="4、劣势："></a>4、劣势：</h3><p>（1）对于相同数据集的数据而言，aof文件要远大于rdb文件，恢复速度慢于rdb。</p><p>（2）对于每秒一次同步的情况，aof运行效率要慢于rdb，不同步效率和rdb相同。</p><p>注：如果同时开启两种持久化方式，在这种情况下,当redis重启的时候会优先载入AOF文件来恢复原始的数据，因为在通常情况下AOF文件保存的数据集要比RDB文件保存的数据集要完整。</p><h2 id="三、Redis4-0的混合持久化："><a href="#三、Redis4-0的混合持久化：" class="headerlink" title="三、Redis4.0的混合持久化："></a>三、Redis4.0的混合持久化：</h2><p>仅使用RDB快照方式恢复数据，由于快照时间粒度较大时，会丢失大量数据。<br>仅使用AOF重放方式恢复数据，日志性能相对 rdb 来说要慢。在 Redis 实例很大的情况下，启动需要花费很长的时间。<br>为了解决这个问题，Redis4.0开始支持RDB和AOF的混合持久化（默认关闭，可以通过配置项 aof-use-rdb-preamble 开启）。RDB 文件的内容和增量的 AOF 日志文件存在一起，这里的 AOF 日志不再是全量的日志，而是自持久化开始到持久化结束的这段时间发生的增量 AOF 日志，通常这部分 AOF 日志很小</p><p>大量数据使用粗粒度（时间上）的rdb快照方式，性能高，恢复时间快。<br>增量数据使用细粒度（时间上）的AOF日志方式，尽量保证数据的不丢失。<br>在Redis重启时，进行AOF重写的时候就直接把RDB的内容写到 AOF 文件开头。这样做的好处是可以结合 RDB和 AOF 的优点，快速加载同时避免丢失过多的数据。当然缺点也是有的， AOF 里面的 RDB 部分是压缩格式不再是AOF 格式，可读性较差。</p><p>另外，可以使用下面这种方式：Master使用AOF，Slave使用RDB快照，master需要首先确保数据完整性，它作为数据备份的第一选择；slave提供只读服务或仅作为备机，它的主要目的就是快速响应客户端read请求或灾切换。</p><div class="tip sync"><p>参考文章：</p><p>原文链接：<a href="https://blog.csdn.net/a745233700/article/details/112726827">https://blog.csdn.net/a745233700/article/details/112726827</a></p></div>]]></content>
+      
+      
+      <categories>
+          
+          <category> 面试八股 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> Redis </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
       <title>订单30分钟未支付则自动取消的几种方法</title>
       <link href="/2023/10/23/%E8%AE%A2%E5%8D%9530%E5%88%86%E9%92%9F%E6%9C%AA%E6%94%AF%E4%BB%98%E5%88%99%E8%87%AA%E5%8A%A8%E5%8F%96%E6%B6%88%E7%9A%84%E5%87%A0%E7%A7%8D%E6%96%B9%E6%B3%95/"/>
       <url>/2023/10/23/%E8%AE%A2%E5%8D%9530%E5%88%86%E9%92%9F%E6%9C%AA%E6%94%AF%E4%BB%98%E5%88%99%E8%87%AA%E5%8A%A8%E5%8F%96%E6%B6%88%E7%9A%84%E5%87%A0%E7%A7%8D%E6%96%B9%E6%B3%95/</url>
@@ -457,9 +482,9 @@
             
             <tag> Spring </tag>
             
-            <tag> Spring6 </tag>
-            
             <tag> IoC容器 </tag>
+            
+            <tag> Spring6 </tag>
             
         </tags>
       
@@ -487,6 +512,31 @@
             <tag> Spring </tag>
             
             <tag> Spring6 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>十大排序算法(一)</title>
+      <link href="/2023/01/05/%E5%8D%81%E5%A4%A7%E6%8E%92%E5%BA%8F%E7%AE%97%E6%B3%95-%E4%B8%80/"/>
+      <url>/2023/01/05/%E5%8D%81%E5%A4%A7%E6%8E%92%E5%BA%8F%E7%AE%97%E6%B3%95-%E4%B8%80/</url>
+      
+        <content type="html"><![CDATA[<h3 id="1、冒泡排序（Bubble-Sort）"><a href="#1、冒泡排序（Bubble-Sort）" class="headerlink" title="1、冒泡排序（Bubble Sort）"></a>1、冒泡排序（Bubble Sort）</h3><div class="tip info"><p>冒泡排序一次比较两个元素，如果它们的顺序与要排序的顺序不一样就把它们交换过来。走访数列的工作是重复地进行直到没有再需要交换，也就是说该数列已经排序完成。简单来说就是在一趟排序后找出最大值或最小值。 </p></div><h4 id="1-1-算法描述"><a href="#1-1-算法描述" class="headerlink" title="1.1 算法描述"></a>1.1 算法描述</h4><ul><li>比较相邻的元素。如果第一个比第二个大（升序排序情况），就交换它们两个；</li><li>对每一对相邻元素作同样的工作，从开始第一对到结尾的最后一对，这样在最后的元素应该会是最大的数；</li><li>针对所有的元素重复以上的步骤，除了最后一个；</li><li>重复步骤1~3，直到排序完成。</li></ul><p><strong>1.2 动图演示</strong></p><p><img src=".\849589-20171015223238449-2146169197.gif" alt="img"></p><h4 id="1-3-代码实现"><a href="#1-3-代码实现" class="headerlink" title="1.3 代码实现"></a>1.3 代码实现</h4><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//升序排序</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="type">int</span>[] bubbleSort(<span class="type">int</span>[] array) &#123;</span><br><span class="line">        <span class="keyword">if</span> (array.length == <span class="number">0</span>)</span><br><span class="line">            <span class="keyword">return</span> array;</span><br><span class="line">        <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">0</span>; i &lt; array.length; i++)</span><br><span class="line">            <span class="keyword">for</span> (<span class="type">int</span> <span class="variable">j</span> <span class="operator">=</span> <span class="number">0</span>; j &lt; array.length - <span class="number">1</span> - i; j++)</span><br><span class="line">                <span class="keyword">if</span> (array[j + <span class="number">1</span>] &lt; array[j]) &#123;</span><br><span class="line">                    <span class="type">int</span> <span class="variable">temp</span> <span class="operator">=</span> array[j + <span class="number">1</span>];</span><br><span class="line">                    array[j + <span class="number">1</span>] = array[j];</span><br><span class="line">                    array[j] = temp;</span><br><span class="line">                &#125;</span><br><span class="line">        <span class="keyword">return</span> array;</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure><h4 id="1-4-算法分析"><a href="#1-4-算法分析" class="headerlink" title="1.4 算法分析"></a>1.4 <strong>算法分析</strong></h4><blockquote><p><strong>最佳情况：T(n) = O(n)  最差情况：T(n) = O(n²)  平均情况：T(n) = O(n²)</strong></p></blockquote>]]></content>
+      
+      
+      <categories>
+          
+          <category> 算法笔记 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> 排序算法 </tag>
             
         </tags>
       
